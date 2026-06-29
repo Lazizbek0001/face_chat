@@ -137,13 +137,14 @@ async def get_apikeys(
 
 @app.post("/chat/new", tags=["AI Chat"])
 async def create_chat(
+    title: str,
     api_key_record: ApiKey = Depends(validate_api_key),
     session: AsyncSession = Depends(get_async_session)
 ):
 
     new_chat = Chat(
         user_id=api_key_record.user_id,
-        title="New Chat"
+        title=title
     )
 
 
@@ -157,4 +158,127 @@ async def create_chat(
     return {
         "chat_id": str(new_chat.id),
         "title": new_chat.title
+    }
+
+@app.get("/chat/list", tags=["AI Chat"])
+async def get_chats(
+    api_key_record: ApiKey = Depends(validate_api_key),
+    session: AsyncSession = Depends(get_async_session)
+    ):
+    result = await session.execute(select(Chat).filter_by(user_id=api_key_record.user_id))
+    chats = [row[0] for row in result.all()]
+    
+    chats_data = []
+
+    for chat in chats:
+        result = await session.execute(select(ChatMessage).filter_by(chat_id=chat.id))
+        messages = [m[0] for m in result.all()]
+        chats_data.append(
+            {
+                "id": chat.id,
+                "user_id": chat.user_id,
+                "title": chat.title,
+                "created_at": chat.created_at,
+                "messages": [
+                    {
+                        "id": m.id,
+                        "chat_id":m.chat_id,
+                        "role":m.role,
+                        "content": m.content,
+                        "created_at":m.created_at,
+                    } for m in messages
+                ]
+
+            }
+        )
+        
+    return {"api_keys":chats_data}
+
+from uuid import UUID
+
+
+@app.post("/chat/{chat_id}", tags=["AI Chat"])
+async def send_message(
+    chat_id: UUID,
+    message: str,
+    api_key_record: ApiKey = Depends(validate_api_key),
+    session: AsyncSession = Depends(get_async_session)
+):
+
+
+    result = await session.execute(
+        select(Chat)
+        .where(
+            Chat.id == chat_id,
+            Chat.user_id == api_key_record.user_id
+        )
+    )
+
+
+    chat = result.scalars().first()
+
+
+    if not chat:
+        raise HTTPException(
+            status_code=404,
+            detail="Chat not found"
+        )
+
+
+    user_message = ChatMessage(
+        chat_id=chat.id,
+        role="user",
+        content=message
+    )
+
+
+    session.add(user_message)
+
+    await session.flush()
+
+
+
+    result = await session.execute(
+        select(ChatMessage)
+        .where(
+            ChatMessage.chat_id == chat.id
+        )
+        .order_by(
+            ChatMessage.created_at
+        )
+    )
+
+
+    history = result.scalars().all()
+
+
+    messages = [
+        {
+            "role": msg.role,
+            "content": msg.content
+        }
+        for msg in history
+    ]
+
+
+    ai_response = await ask_ai_cloud(messages)
+
+
+
+    assistant_message = ChatMessage(
+        chat_id=chat.id,
+        role="assistant",
+        content=ai_response
+    )
+
+
+    session.add(assistant_message)
+
+
+    await session.commit()
+
+
+    return {
+        "chat_id": str(chat.id),
+        "response": ai_response
     }

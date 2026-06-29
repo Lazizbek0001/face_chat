@@ -1,4 +1,6 @@
 from fastapi import FastAPI, HTTPException, File, UploadFile, Depends, Header
+from .ai_ollama import ask_ai_cloud, ask_ai_local
+from .models.chat import Chat, ChatMessage
 from src.schemas import UserCreate, UserRead, UserUpdate
 from src.db import ApiKey, User, create_db_and_tables, get_async_session
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,17 +83,12 @@ async def verify_two_faces(
             tmp1.flush()
             tmp2.flush()
             
-            # Perform direct facial verification
             result = DeepFace.verify(
                 img1_path=tmp1.name,
                 img2_path=tmp2.name,
                 model_name="Facenet512",
                 enforce_detection=True
             )
-            
-            # Convert distance to similarity percentage (0-100)
-            # Smaller distance = higher similarity
-            # Typical max distance for VGG-Face: ~1.5
             distance = result["distance"]
             max_distance = 1.5
             similarity_percentage = max(0, (1 - distance / max_distance) * 100)
@@ -110,3 +107,54 @@ async def verify_two_faces(
         raise HTTPException(status_code=400, detail=f"Could not detect face: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Facial analysis failed: {str(e)}")
+    
+@app.get("/apikeys/list", tags=["API Keys"])
+async def get_apikeys(
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session)
+    ):
+    result = await session.execute(select(ApiKey).filter_by(user_id=user.id).order_by(ApiKey.created_at.desc()))
+    apikeys = [row[0] for row in result.all()]
+
+    result = await session.execute(select(User).filter_by(id=user.id))
+    users = [row[0] for row in result.all()]
+    user_dict = {u.id: u.email for u in users}
+    keys_data = []
+
+    for key in apikeys:
+        keys_data.append(
+            {
+                "key": str(key.id),
+                "user_id": str(key.user_id),
+                "created_at": key.created_at,
+                "is_owner": key.user_id == user.id,
+                "email": user_dict[key.user_id]
+
+            }
+        )
+    return {"api_keys":keys_data}
+
+
+@app.post("/chat/new", tags=["AI Chat"])
+async def create_chat(
+    api_key_record: ApiKey = Depends(validate_api_key),
+    session: AsyncSession = Depends(get_async_session)
+):
+
+    new_chat = Chat(
+        user_id=api_key_record.user_id,
+        title="New Chat"
+    )
+
+
+    session.add(new_chat)
+
+    await session.commit()
+
+    await session.refresh(new_chat)
+
+
+    return {
+        "chat_id": str(new_chat.id),
+        "title": new_chat.title
+    }

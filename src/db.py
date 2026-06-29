@@ -23,7 +23,6 @@ class ApiKey(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
     
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    # Adds an expiration window (e.g., defaults to 30 days from now)
     valid_until = Column(DateTime, default=lambda: datetime.now(timezone.utc) + timedelta(days=30))
 
     user = relationship("User", back_populates="apikeys")

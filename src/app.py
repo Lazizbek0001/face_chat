@@ -205,7 +205,7 @@ async def send_message(
     session: AsyncSession = Depends(get_async_session)
 ):
 
-
+ 
     result = await session.execute(
         select(Chat)
         .where(

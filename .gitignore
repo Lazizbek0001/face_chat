@@ -1,3 +1,4 @@
 venv/
 src/__pycashe__/
 test.db
+src/models/__pycashe__/

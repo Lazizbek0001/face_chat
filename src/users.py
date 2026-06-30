@@ -9,7 +9,7 @@ from src.db import SQLAlchemyUserDatabase
 from src.db import User, get_user_db
 load_dotenv
 
-SECRET = os.getenv("SECRET")
+SECRET = str(os.getenv("SECRET"))
 
 class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     reset_password_token_secret = SECRET

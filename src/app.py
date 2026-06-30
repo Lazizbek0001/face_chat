@@ -1,3 +1,5 @@
+import time
+
 from fastapi import FastAPI, HTTPException, File, UploadFile, Depends, Header
 from .ai_ollama import ask_ai_cloud, ask_ai_local
 from .models.chat import Chat, ChatMessage
@@ -186,7 +188,15 @@ async def get_chats(
                         "role":m.role,
                         "content": m.content,
                         "created_at":m.created_at,
-                    } for m in messages
+                    }if m.role == 'user' else 
+                    {
+                        "id": m.id,
+                        "chat_id":m.chat_id,
+                        "role":m.role,
+                        "duration": m.duration,
+                        "content": m.content,
+                        "created_at":m.created_at,
+                    } for m in messages 
                 ]
 
             }
@@ -260,15 +270,16 @@ async def send_message(
         for msg in history
     ]
 
-
+    start = time.perf_counter()
     ai_response = await ask_ai_cloud(messages)
 
 
-
+    duration = time.perf_counter() - start
     assistant_message = ChatMessage(
         chat_id=chat.id,
-        role="assistant",
-        content=ai_response
+        role="system",
+        content=ai_response,
+        duration=round(duration, 3)
     )
 
 

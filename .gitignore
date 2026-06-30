@@ -3,3 +3,4 @@ src/__pycache__/
 test.db
 src/models/__pycache__/
 .env
+__pycache__/

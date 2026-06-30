@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column,
+    Float,
     Text,
     DateTime,
     ForeignKey,
@@ -80,6 +81,12 @@ class ChatMessage(Base):
 
     content = Column(
         Text
+    )
+    
+    duration = Column(
+        Float,
+        nullable=True,
+        default=None
     )
 
 

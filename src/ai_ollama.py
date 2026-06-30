@@ -1,10 +1,12 @@
 import os
 from ollama import Client
 import ollama
+from dotenv import load_dotenv
 
+load_dotenv
 client = Client(
     host="https://ollama.com",
-    headers={'Authorization': f'Bearer {"571d151a68364224a3b2f25af1e8de3b.1N6yIthmQx7XxnnGbHjZocSz"}'}
+    headers={'Authorization': f'Bearer {os.getenv("OLLAMA_KEY")}'}
 )
 async def ask_ai_cloud(messages: list):
     response = client.chat(

@@ -1,4 +1,5 @@
 venv/
-src/__pycashe__/
+src/__pycache__/
 test.db
-src/models/__pycashe__/
+src/models/__pycache__/
+.env

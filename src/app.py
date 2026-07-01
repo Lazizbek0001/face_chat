@@ -120,8 +120,7 @@ async def verify_two_faces(
             similarity_percentage = max(0, (1 - distance / max_distance) * 100)
             duration = time.perf_counter() - start
             logger.info(
-                "Deepface response generated in %.3f seconds",
-                duration,
+                f"Deepface response generated in {round(duration, 2)} seconds and similarity percentage is {round(similarity_percentage, 2)}",
             )
             
         return {

@@ -4,3 +4,4 @@ test.db
 src/models/__pycache__/
 .env
 __pycache__/
+logs/

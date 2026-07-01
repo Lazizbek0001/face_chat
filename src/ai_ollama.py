@@ -15,11 +15,9 @@ async def ask_ai_cloud(messages: list):
         model='gpt-oss:20b-cloud', 
         messages=messages
     )
-    print(os.getenv("OLLAMA_KEY"))
-    print(response)
     return response['message']['content']
     
-
+ 
 async def ask_ai_local(messages: list):
     response = ollama.chat(
         model="qwen2.5vl:32b",

@@ -1,6 +1,6 @@
 import time
 
-from fastapi import FastAPI, HTTPException, File, UploadFile, Depends, Header
+from fastapi import FastAPI, HTTPException, File, Request, UploadFile, Depends, Header
 from .ai_ollama import ask_ai_cloud, ask_ai_local
 from .models.chat import Chat, ChatMessage
 from src.schemas import UserCreate, UserRead, UserUpdate
@@ -13,13 +13,32 @@ import uuid
 import tempfile
 from deepface import DeepFace
 from src.users import auth_backend, current_active_user, fastapi_users
-
+from src.logging_config import logger
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_db_and_tables()
     yield
 
 app = FastAPI(lifespan=lifespan)
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+
+    response = await call_next(request)
+
+    duration = time.perf_counter() - start
+
+    logger.info(
+        "%s %s %d %.3fs",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration,
+    )
+
+    return response
+
 
 # Existing FastAPI-Users Routers
 app.include_router(fastapi_users.get_auth_router(auth_backend), prefix="/auth/jwt", tags=["auth"])
@@ -74,6 +93,11 @@ async def verify_two_faces(
     api_key_record: ApiKey = Depends(validate_api_key)
 ):
     try:
+        start = time.perf_counter()
+
+
+
+    
         file_bytes1 = await img1.read()
         file_bytes2 = await img2.read()
         
@@ -94,6 +118,11 @@ async def verify_two_faces(
             distance = result["distance"]
             max_distance = 1.5
             similarity_percentage = max(0, (1 - distance / max_distance) * 100)
+            duration = time.perf_counter() - start
+            logger.info(
+                "Deepface response generated in %.3f seconds",
+                duration,
+            )
             
         return {
             "verified": result["verified"],
@@ -280,6 +309,11 @@ async def send_message(
         role="system",
         content=ai_response,
         duration=round(duration, 3)
+    )
+    logger.info(
+        "AI response generated in %.3f seconds for chat %s",
+        duration,
+        chat.id,
     )
 
 

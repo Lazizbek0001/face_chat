@@ -8,7 +8,7 @@ def generate_embedding(image_path: str, model_name: str = "Facenet512") -> list[
         enforce_detection=True
     )
 
-    return result[0]["embedding"]
+    return result[0]["embedding"], model_name
 
 
 def compare_embeddings(

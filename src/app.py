@@ -1,7 +1,5 @@
 import time
-
 from fastapi import FastAPI, HTTPException, File, Request, UploadFile, Depends, Header
-
 from src.ai_face import compare_embeddings, generate_embedding
 from .ai_ollama import ask_ai_cloud, ask_ai_local
 from .models.chat import Chat, ChatMessage
@@ -108,12 +106,12 @@ async def verify_two_faces(
             tmp1.flush()
             tmp2.flush()
             
-            img1 = generate_embedding(tmp1.name)
-            img2 = generate_embedding(tmp2.name)
+            img1, model_name1 = generate_embedding(tmp1.name)
+            img2, model_name2 = generate_embedding(tmp2.name)
             result = compare_embeddings(img1, img2)
             duration = time.perf_counter() - start
             logger.info(
-                f"Deepface response generated in {round(duration, 2)} seconds and similarity percentage is {result['similarity']}",
+                f"Deepface response generated in {round(duration, 2)} seconds and similarity percentage is {result['similarity']}, model: {model_name1}",
             )
         return {
             "verified": bool(result['verified']),

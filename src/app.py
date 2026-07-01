@@ -1,6 +1,8 @@
 import time
 
 from fastapi import FastAPI, HTTPException, File, Request, UploadFile, Depends, Header
+
+from src.ai_face import compare_embeddings, generate_embedding
 from .ai_ollama import ask_ai_cloud, ask_ai_local
 from .models.chat import Chat, ChatMessage
 from src.schemas import UserCreate, UserRead, UserUpdate
@@ -95,9 +97,6 @@ async def verify_two_faces(
     try:
         start = time.perf_counter()
 
-
-
-    
         file_bytes1 = await img1.read()
         file_bytes2 = await img2.read()
         
@@ -109,27 +108,19 @@ async def verify_two_faces(
             tmp1.flush()
             tmp2.flush()
             
-            result = DeepFace.verify(
-                img1_path=tmp1.name,
-                img2_path=tmp2.name,
-                model_name="Facenet512",
-                enforce_detection=True
-            )
-            distance = result["distance"]
-            max_distance = 1.5
-            similarity_percentage = max(0, (1 - distance / max_distance) * 100)
+            img1 = generate_embedding(tmp1.name)
+            img2 = generate_embedding(tmp2.name)
+            result = compare_embeddings(img1, img2)
             duration = time.perf_counter() - start
             logger.info(
-                f"Deepface response generated in {round(duration, 2)} seconds and similarity percentage is {round(similarity_percentage, 2)}",
+                f"Deepface response generated in {round(duration, 2)} seconds and similarity percentage is {result['similarity']}",
             )
-            
         return {
-            "verified": result["verified"],
-            "similarity": round(similarity_percentage, 2),  # 0-100%
-            "similarity_confidence": "high" if similarity_percentage > 70 else "medium" if similarity_percentage > 40 else "low",
-            "distance": round(distance, 4),  # Raw metric for reference
+            "verified": bool(result['verified']),
+            "similarity": result['similarity'],
+            "cosine_similarity": result["cosine_similarity"],
             "threshold": result["threshold"],
-            "modelUsed": result["model"]
+            "duration": duration
         }
         
     except ValueError as e:

@@ -2,7 +2,7 @@ import time
 from fastapi import FastAPI, HTTPException, File, Request, UploadFile, Depends, Header, WebSocket, WebSocketDisconnect
 from src.ai_face import compare_embeddings, generate_embedding
 from src.video import create_video_writer, decode_frame, generate_frames, write_frame
-from .ai_ollama import ask_ai_cloud, ask_ai_local
+from .ai_ollama import ask_ai, ask_ai_cloud, ask_ai_local
 from .models.chat import Chat, ChatMessage
 from src.schemas import UserCreate, UserRead, UserUpdate
 from src.db import ApiKey, User, create_db_and_tables, get_async_session
@@ -228,91 +228,85 @@ async def send_message(
     chat_id: UUID,
     message: str,
     api_key_record: ApiKey = Depends(validate_api_key),
-    session: AsyncSession = Depends(get_async_session)
+    session: AsyncSession = Depends(get_async_session),
 ):
-
- 
     result = await session.execute(
-        select(Chat)
-        .where(
+        select(Chat).where(
             Chat.id == chat_id,
-            Chat.user_id == api_key_record.user_id
+            Chat.user_id == api_key_record.user_id,
         )
     )
 
-
     chat = result.scalars().first()
-
 
     if not chat:
         raise HTTPException(
             status_code=404,
-            detail="Chat not found"
+            detail="Chat not found",
         )
 
-
+    # Save user's message
     user_message = ChatMessage(
         chat_id=chat.id,
         role="user",
-        content=message
+        content=message,
     )
-
 
     session.add(user_message)
-
     await session.flush()
 
-
-
+    # Fetch conversation history
     result = await session.execute(
         select(ChatMessage)
-        .where(
-            ChatMessage.chat_id == chat.id
-        )
-        .order_by(
-            ChatMessage.created_at
-        )
+        .where(ChatMessage.chat_id == chat.id)
+        .order_by(ChatMessage.created_at)
     )
 
-
     history = result.scalars().all()
-
 
     messages = [
         {
             "role": msg.role,
-            "content": msg.content
+            "content": msg.content,
         }
         for msg in history
     ]
 
+    # Generate AI response
     start = time.perf_counter()
-    ai_response = await ask_ai_cloud(messages)
 
+    try:
+        ai_response = await ask_ai(messages)
+    except Exception:
+        logger.exception("Failed to generate AI response.")
+        raise HTTPException(
+            status_code=503,
+            detail="AI service is temporarily unavailable.",
+        )
 
     duration = time.perf_counter() - start
-    assistant_message = ChatMessage(
-        chat_id=chat.id,
-        role="system",
-        content=ai_response,
-        duration=round(duration, 3)
-    )
+
     logger.info(
         "AI response generated in %.3f seconds for chat %s",
         duration,
         chat.id,
     )
 
+    # Save assistant response
+    assistant_message = ChatMessage(
+        chat_id=chat.id,
+        role="assistant",
+        content=ai_response,
+        duration=round(duration, 3),
+    )
 
     session.add(assistant_message)
-
-
     await session.commit()
-
 
     return {
         "chat_id": str(chat.id),
-        "response": ai_response
+        "response": ai_response,
+        "duration": round(duration, 3),
     }
 
 

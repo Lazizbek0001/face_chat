@@ -1,6 +1,7 @@
 import time
-from fastapi import FastAPI, HTTPException, File, Request, UploadFile, Depends, Header
+from fastapi import FastAPI, HTTPException, File, Request, UploadFile, Depends, Header, WebSocket, WebSocketDisconnect
 from src.ai_face import compare_embeddings, generate_embedding
+from src.video import create_video_writer, decode_frame, generate_frames, write_frame
 from .ai_ollama import ask_ai_cloud, ask_ai_local
 from .models.chat import Chat, ChatMessage
 from src.schemas import UserCreate, UserRead, UserUpdate
@@ -14,6 +15,8 @@ import tempfile
 from deepface import DeepFace
 from src.users import auth_backend, current_active_user, fastapi_users
 from src.logging_config import logger
+from fastapi.responses import StreamingResponse
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_db_and_tables()
@@ -23,19 +26,15 @@ app = FastAPI(lifespan=lifespan)
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    start = time.perf_counter()
-
     response = await call_next(request)
 
-    duration = time.perf_counter() - start
-
-    logger.info(
-        "%s %s %d %.3fs",
-        request.method,
-        request.url.path,
-        response.status_code,
-        duration,
-    )
+    if request.url.path not in {"/video_feed", "/ws/feed"}:
+        logger.info(
+            "%s %s %d",
+            request.method,
+            request.url.path,
+            response.status_code,
+        )
 
     return response
 
@@ -315,3 +314,49 @@ async def send_message(
         "chat_id": str(chat.id),
         "response": ai_response
     }
+
+
+
+
+@app.get("/video_feed")
+async def video_feed():
+    return StreamingResponse(
+        generate_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+@app.websocket("/ws/feed")
+async def receive_stream(
+    websocket: WebSocket,
+    api_key_record: ApiKey = Depends(validate_api_key),
+    session: AsyncSession = Depends(get_async_session),
+):
+    await websocket.accept()
+
+    writer = None
+
+    try:
+        while True:
+            data = await websocket.receive_bytes()
+
+            frame = decode_frame(data)
+            if frame is None:
+                continue
+            
+            name = (
+                f"{api_key_record.user_id}_"
+                f"{datetime.now():%Y%m%d_%H%M%S}.mp4"
+            )
+
+            if writer is None:
+                writer = create_video_writer(name, frame)
+
+            write_frame(writer, frame)
+
+    except WebSocketDisconnect:
+        print("Client disconnected")
+
+    finally:
+        if writer is not None:
+            writer.release()

@@ -1,3 +1,5 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import time
 from fastapi import FastAPI, HTTPException, File, Request, UploadFile, Depends, Header, WebSocket, WebSocketDisconnect
 from src.ai_face import compare_embeddings, generate_embedding
@@ -23,6 +25,11 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(lifespan=lifespan)
+
+@app.on_event("startup")
+async def startup():
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=20))
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):

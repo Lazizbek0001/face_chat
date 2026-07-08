@@ -4,7 +4,7 @@ from ollama import Client
 import ollama
 from dotenv import load_dotenv
 import asyncio
-load_dotenv
+load_dotenv()
 
 
 client = Client(

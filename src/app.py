@@ -4,7 +4,7 @@ import time
 from fastapi import FastAPI, HTTPException, File, Request, UploadFile, Depends, Header, WebSocket, WebSocketDisconnect
 from src.ai_face import compare_embeddings, generate_embedding
 from src.video import create_video_writer, decode_frame, generate_frames, write_frame
-from .ai_ollama import ask_ai, ask_ai_cloud, ask_ai_local
+from .ai_ollama import ask_ai_cloud
 from .models.chat import Chat, ChatMessage
 from src.schemas import UserCreate, UserRead, UserUpdate
 from src.db import ApiKey, User, create_db_and_tables, get_async_session
@@ -25,11 +25,6 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(lifespan=lifespan)
-
-@app.on_event("startup")
-async def startup():
-    loop = asyncio.get_running_loop()
-    loop.set_default_executor(ThreadPoolExecutor(max_workers=20))
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -283,7 +278,7 @@ async def send_message(
     start = time.perf_counter()
 
     try:
-        ai_response = await ask_ai(messages)
+        ai_response = await ask_ai_cloud(messages)
     except Exception:
         logger.exception("Failed to generate AI response.")
         raise HTTPException(

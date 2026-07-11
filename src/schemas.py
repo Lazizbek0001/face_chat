@@ -38,3 +38,8 @@ class ChatResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class ChatRequest(BaseModel):
+    id: uuid.UUID
+    message: str
+    model: str

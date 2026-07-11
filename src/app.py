@@ -4,9 +4,9 @@ import time
 from fastapi import FastAPI, HTTPException, File, Request, UploadFile, Depends, Header, WebSocket, WebSocketDisconnect
 from src.ai_face import compare_embeddings, generate_embedding
 from src.video import create_video_writer, decode_frame, generate_frames, write_frame
-from .ai_ollama import ask_ai_cloud
+from .ai_ollama import MODELS, ask_ai_cloud
 from .models.chat import Chat, ChatMessage
-from src.schemas import UserCreate, UserRead, UserUpdate
+from src.schemas import ChatRequest, UserCreate, UserRead, UserUpdate
 from src.db import ApiKey, User, create_db_and_tables, get_async_session
 from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import asynccontextmanager
@@ -220,15 +220,22 @@ async def get_chats(
             }
         )
         
-    return {"api_keys":chats_data}
+    return {"chat_list":chats_data}
 
 from uuid import UUID
 
+@app.post("/chat/ai/models", tags=["AI Chat"])
+async def send_message(
+    api_key_record: ApiKey = Depends(validate_api_key),
+    session: AsyncSession = Depends(get_async_session),
+):
+
+    return MODELS
 
 @app.post("/chat/{chat_id}", tags=["AI Chat"])
 async def send_message(
     chat_id: UUID,
-    message: str,
+    data: ChatRequest,
     api_key_record: ApiKey = Depends(validate_api_key),
     session: AsyncSession = Depends(get_async_session),
 ):
@@ -251,7 +258,7 @@ async def send_message(
     user_message = ChatMessage(
         chat_id=chat.id,
         role="user",
-        content=message,
+        content=data.message,
     )
 
     session.add(user_message)
@@ -278,7 +285,7 @@ async def send_message(
     start = time.perf_counter()
 
     try:
-        ai_response = await ask_ai_cloud(messages)
+        ai_response = await ask_ai_cloud(messages, model=data.model)
     except Exception:
         logger.exception("Failed to generate AI response.")
         raise HTTPException(

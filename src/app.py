@@ -1,8 +1,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import time
-from fastapi import FastAPI, HTTPException, File, Request, UploadFile, Depends, Header, WebSocket, WebSocketDisconnect
-from src.ai_face import compare_embeddings, generate_embedding
+from fastapi import FastAPI, HTTPException, Request, Depends, Header, WebSocket, WebSocketDisconnect
 from src.video import create_video_writer, decode_frame, generate_frames, write_frame
 from .ai_ollama import MODELS, ask_ai_cloud
 from .models.chat import Chat, ChatMessage
@@ -13,8 +12,6 @@ from contextlib import asynccontextmanager
 from sqlalchemy import select
 from datetime import datetime, timezone
 import uuid
-import tempfile
-from deepface import DeepFace
 from src.users import auth_backend, current_active_user, fastapi_users
 from src.logging_config import logger
 from fastapi.responses import StreamingResponse
@@ -87,47 +84,6 @@ async def validate_api_key(x_api_key: str = Header(None), db: AsyncSession = Dep
         
     return api_key_record
 
-@app.post("/api/v1/verify-faces", tags=["Face Recognition"])
-async def verify_two_faces(
-    img1: UploadFile = File(...),
-    img2: UploadFile = File(...),
-    api_key_record: ApiKey = Depends(validate_api_key)
-):
-    try:
-        start = time.perf_counter()
-
-        file_bytes1 = await img1.read()
-        file_bytes2 = await img2.read()
-        
-        with tempfile.NamedTemporaryFile(delete=True, suffix=".jpg") as tmp1, \
-             tempfile.NamedTemporaryFile(delete=True, suffix=".jpg") as tmp2:
-             
-            tmp1.write(file_bytes1)
-            tmp2.write(file_bytes2)
-            tmp1.flush()
-            tmp2.flush()
-            
-            img1, model_name1 = generate_embedding(tmp1.name)
-            img2, model_name2 = generate_embedding(tmp2.name)
-            result = compare_embeddings(img1, img2)
-            duration = time.perf_counter() - start
-            logger.info(
-                f"Deepface response generated in {round(duration, 2)} seconds and similarity percentage is {result['similarity']}, model: {model_name1}",
-            )
-        return {
-            "verified": bool(result['verified']),
-            "similarity": result['similarity'],
-            "cosine_similarity": result["cosine_similarity"],
-            "threshold": result["threshold"],
-            "duration": duration
-        }
-        
-    except ValueError as e:
-        # DeepFace raises ValueError when no face is detected
-        raise HTTPException(status_code=400, detail=f"Could not detect face: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Facial analysis failed: {str(e)}")
-    
 @app.get("/apikeys/list", tags=["API Keys"])
 async def get_apikeys(
     user: User = Depends(current_active_user),

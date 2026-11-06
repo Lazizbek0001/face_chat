@@ -1,4 +1,3 @@
-import hashlib
 import secrets
 import time
 from collections import defaultdict, deque
@@ -12,8 +11,9 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db import User, get_async_session
+from src.db import User, get_async_session, hash_secret
 from src.hub.schemas import (
+    AuthorizeRequest,
     LinkRequest,
     LinkResponse,
     OpenResponse,
@@ -31,10 +31,6 @@ router = APIRouter(prefix="/hub", tags=["Hub"])
 
 CODE_TTL = timedelta(seconds=60)
 VERIFY_TIMEOUT_SECONDS = 10.0
-
-
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
 
 
 class RateLimiter:
@@ -106,7 +102,7 @@ async def create_site(
         name=data.name,
         base_url=data.base_url,
         verify_url=data.verify_url,
-        site_key_hash=_sha256(site_key),
+        site_key_hash=hash_secret(site_key),
         hub_key=hub_key,
     )
     session.add(site)
@@ -201,11 +197,24 @@ async def link_site(
     if remote_user_id is None or str(remote_user_id) == "":
         raise HTTPException(status_code=502, detail="Unexpected response from site.")
 
+    remote_user_id = str(remote_user_id)
+    taken = await session.execute(
+        select(SiteLink.id).where(
+            SiteLink.site_id == site.id,
+            SiteLink.remote_user_id == remote_user_id,
+            SiteLink.user_id != user.id,
+        )
+    )
+    if taken.first() is not None:
+        raise HTTPException(
+            status_code=409, detail="This account is already linked to another hub user."
+        )
+
     link = await _get_link(session, user.id, site.id)
     if link is None:
-        session.add(SiteLink(user_id=user.id, site_id=site.id, remote_user_id=str(remote_user_id)))
+        session.add(SiteLink(user_id=user.id, site_id=site.id, remote_user_id=remote_user_id))
     else:
-        link.remote_user_id = str(remote_user_id)
+        link.remote_user_id = remote_user_id
     try:
         await session.commit()
     except IntegrityError:
@@ -234,12 +243,32 @@ async def open_site(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),
 ):
-    """Create a one-time code and return the URL to send the browser to.
+    """Return the URL that starts a login on the site. The frontend sets window.location to it.
 
-    This is a POST returning JSON, not a redirect, because the browser cannot attach
-    the bearer token to a plain link. The frontend sets window.location to redirect_url.
+    The site's /hub/start saves a random state in a cookie and sends the browser to the hub
+    frontend's /authorize page, which calls POST /hub/authorize. Opening from the hub and
+    clicking "Log in with Hub" on the site therefore run the same flow, and the state check
+    on the site stops an attacker from logging a victim in to the attacker's account.
     """
     site = await _get_site(session, site_id)
+    if await _get_link(session, user.id, site.id) is None:
+        raise HTTPException(status_code=404, detail="Link this site first.")
+    return OpenResponse(redirect_url=f"{site.base_url}/hub/start")
+
+
+@router.post("/authorize", response_model=OpenResponse)
+async def authorize(
+    data: AuthorizeRequest,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Called by the hub frontend's /authorize page for the logged-in user.
+
+    Returns the site's /hub/sso URL with a one-time code. The URL always points to the
+    site's registered base_url, never to an address from the request, so it cannot be
+    used to send codes elsewhere. 404 means the user must link the site first.
+    """
+    site = await _get_site(session, data.site_id)
     link = await _get_link(session, user.id, site.id)
     if link is None:
         raise HTTPException(status_code=404, detail="Link this site first.")
@@ -249,14 +278,15 @@ async def open_site(
     await session.execute(delete(SsoCode).where(SsoCode.expires_at < now - timedelta(hours=1)))
     session.add(
         SsoCode(
-            code_hash=_sha256(code),
+            code_hash=hash_secret(code),
             site_id=site.id,
             remote_user_id=link.remote_user_id,
             expires_at=now + CODE_TTL,
         )
     )
     await session.commit()
-    return OpenResponse(redirect_url=f"{site.base_url}/hub/sso?{urlencode({'code': code})}")
+    query = urlencode({"code": code, "state": data.state})
+    return OpenResponse(redirect_url=f"{site.base_url}/hub/sso?{query}")
 
 
 # ---------------------------------------------------------------- site -> hub
@@ -268,7 +298,7 @@ async def get_calling_site(
 ) -> Site:
     if not x_site_key:
         raise HTTPException(status_code=401, detail="X-Site-Key header missing.")
-    result = await session.execute(select(Site).where(Site.site_key_hash == _sha256(x_site_key)))
+    result = await session.execute(select(Site).where(Site.site_key_hash == hash_secret(x_site_key)))
     site = result.scalars().first()
     if site is None:
         raise HTTPException(status_code=401, detail="Unauthorized site.")
@@ -287,7 +317,7 @@ async def redeem_code(
     result = await session.execute(
         update(SsoCode)
         .where(
-            SsoCode.code_hash == _sha256(data.code),
+            SsoCode.code_hash == hash_secret(data.code),
             SsoCode.site_id == site.id,
             SsoCode.used_at.is_(None),
             SsoCode.expires_at > now,

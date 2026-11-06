@@ -1,7 +1,5 @@
 import os
-from venv import logger
 from ollama import Client
-import ollama
 from dotenv import load_dotenv
 import asyncio
 load_dotenv()
@@ -44,9 +42,13 @@ MODELS = [
     },
 ]
 
+OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY")
+if not OLLAMA_API_KEY:
+    raise RuntimeError("Set OLLAMA_API_KEY in .env.")
+
 client = Client(
     host="https://ollama.com",
-    headers={'Authorization': f'Bearer {"a5adf1fd3324416190a18b35827960ab.sDQCli6rRyWVgI9fI_IVQGUi"}'}
+    headers={"Authorization": f"Bearer {OLLAMA_API_KEY}"},
 )
 
 async def ask_ai_cloud(messages, model="gemma4:31b-cloud"):

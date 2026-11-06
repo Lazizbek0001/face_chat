@@ -72,6 +72,12 @@ class OpenResponse(BaseModel):
     redirect_url: str
 
 
+class AuthorizeRequest(BaseModel):
+    site_id: uuid.UUID
+    # Made by the site and stored in a cookie there. The hub only passes it back.
+    state: str = Field(min_length=16, max_length=200, pattern=r"^[A-Za-z0-9_-]+$")
+
+
 class RedeemRequest(BaseModel):
     code: str = Field(min_length=20, max_length=200)
 

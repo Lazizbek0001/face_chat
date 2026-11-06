@@ -36,7 +36,11 @@ class SiteLink(Base):
     """Connects a hub user to their account on a site. Never holds a password."""
 
     __tablename__ = "hub_links"
-    __table_args__ = (UniqueConstraint("user_id", "site_id", name="uq_hub_link_user_site"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "site_id", name="uq_hub_link_user_site"),
+        # One account on a site can belong to only one hub user.
+        UniqueConstraint("site_id", "remote_user_id", name="uq_hub_link_site_remote_user"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="CASCADE"), nullable=False)

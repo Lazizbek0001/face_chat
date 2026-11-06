@@ -1,18 +1,21 @@
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+import secrets
 import time
-from fastapi import FastAPI, HTTPException, Request, Depends, Header
-from .ai_ollama import MODELS, ask_ai_cloud
-from .models.chat import Chat, ChatMessage
-from src.schemas import ChatRequest, UserCreate, UserRead, UserUpdate
-from src.db import ApiKey, User, create_db_and_tables, get_async_session
-from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import asynccontextmanager
-from sqlalchemy import select
 from datetime import datetime, timezone
-import uuid
-from src.users import auth_backend, current_active_user, fastapi_users
+from uuid import UUID
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from src.ai_ollama import MODELS, ask_ai_cloud
+from src.db import ApiKey, User, create_db_and_tables, get_async_session, hash_secret
+from src.hub.router import router as hub_router
 from src.logging_config import logger
+from src.models.chat import Chat, ChatMessage
+from src.schemas import ChatRequest, UserCreate, UserRead, UserUpdate
+from src.users import auth_backend, current_active_user, fastapi_users
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,37 +44,36 @@ app.include_router(fastapi_users.get_register_router(UserRead, UserCreate), pref
 app.include_router(fastapi_users.get_reset_password_router(), prefix="/auth", tags=["auth"])
 app.include_router(fastapi_users.get_verify_router(UserRead), prefix="/auth", tags=["auth"])
 app.include_router(fastapi_users.get_users_router(UserRead, UserUpdate), prefix="/users", tags=["users"])
+app.include_router(hub_router)
 
 
 @app.post("/apikeys/generate", tags=["API Keys"])
 async def generate_api_key(
-    user: User = Depends(current_active_user), 
-    db: AsyncSession = Depends(get_async_session)
+    user: User = Depends(current_active_user),
+    db: AsyncSession = Depends(get_async_session),
 ):
-    """Generates a new API Key for the logged-in user valid for 30 days."""
-    new_key = ApiKey(user_id=user.id)
+    """Generates a new API key for the logged-in user, valid for 30 days.
+
+    The key is returned only here. Only its hash is stored, so it cannot be shown again.
+    """
+    raw_key = secrets.token_urlsafe(32)
+    new_key = ApiKey(user_id=user.id, key_hash=hash_secret(raw_key))
     db.add(new_key)
     await db.commit()
     return {
-        "api_key": str(new_key.id),
-        "valid_until": new_key.valid_until.isoformat()
+        "id": str(new_key.id),
+        "api_key": raw_key,
+        "valid_until": new_key.valid_until.isoformat(),
     }
-
-
 
 
 async def validate_api_key(x_api_key: str = Header(None), db: AsyncSession = Depends(get_async_session)):
     if not x_api_key:
         raise HTTPException(status_code=401, detail="X-API-Key header missing.")
-    
-    try:
-        key_uuid = uuid.UUID(x_api_key)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid API Key format.")
-    
-    result = await db.execute(select(ApiKey).where(ApiKey.id == key_uuid))
+
+    result = await db.execute(select(ApiKey).where(ApiKey.key_hash == hash_secret(x_api_key)))
     api_key_record = result.scalars().first()
-    
+
     if not api_key_record:
         raise HTTPException(status_code=401, detail="Unauthorized API Key.")
         
@@ -86,26 +88,21 @@ async def get_apikeys(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session)
     ):
-    result = await session.execute(select(ApiKey).filter_by(user_id=user.id).order_by(ApiKey.created_at.desc()))
-    apikeys = [row[0] for row in result.all()]
-
-    result = await session.execute(select(User).filter_by(id=user.id))
-    users = [row[0] for row in result.all()]
-    user_dict = {u.id: u.email for u in users}
-    keys_data = []
-
-    for key in apikeys:
-        keys_data.append(
-            {
-                "key": str(key.id),
-                "user_id": str(key.user_id),
-                "created_at": key.created_at,
-                "is_owner": key.user_id == user.id,
-                "email": user_dict[key.user_id]
-
-            }
-        )
-    return {"api_keys":keys_data}
+    """Lists the user's keys without the keys themselves: only their ids and dates."""
+    result = await session.execute(
+        select(ApiKey).filter_by(user_id=user.id).order_by(ApiKey.created_at.desc())
+    )
+    keys_data = [
+        {
+            "id": str(key.id),
+            "user_id": str(key.user_id),
+            "created_at": key.created_at,
+            "valid_until": key.valid_until,
+            "email": user.email,
+        }
+        for key in result.scalars().all()
+    ]
+    return {"api_keys": keys_data}
 
 
 @app.post("/chat/new", tags=["AI Chat"])
@@ -138,14 +135,18 @@ async def get_chats(
     api_key_record: ApiKey = Depends(validate_api_key),
     session: AsyncSession = Depends(get_async_session)
     ):
-    result = await session.execute(select(Chat).filter_by(user_id=api_key_record.user_id))
-    chats = [row[0] for row in result.all()]
-    
+    # selectinload fetches every chat's messages in one extra query, not one query per chat.
+    result = await session.execute(
+        select(Chat)
+        .filter_by(user_id=api_key_record.user_id)
+        .options(selectinload(Chat.messages))
+    )
+    chats = result.scalars().all()
+
     chats_data = []
 
     for chat in chats:
-        result = await session.execute(select(ChatMessage).filter_by(chat_id=chat.id))
-        messages = [m[0] for m in result.all()]
+        messages = sorted(chat.messages, key=lambda m: m.created_at)
         chats_data.append(
             {
                 "id": chat.id,
@@ -175,14 +176,11 @@ async def get_chats(
         
     return {"chat_list":chats_data}
 
-from uuid import UUID
-
-@app.post("/chat/ai/models", tags=["AI Chat"])
-async def send_message(
+# GET is the right method for reading a list. POST still works so existing clients keep working.
+@app.api_route("/chat/ai/models", methods=["GET", "POST"], tags=["AI Chat"])
+async def list_models(
     api_key_record: ApiKey = Depends(validate_api_key),
-    session: AsyncSession = Depends(get_async_session),
 ):
-
     return MODELS
 
 @app.post("/chat/{chat_id}", tags=["AI Chat"])

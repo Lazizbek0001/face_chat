@@ -1,8 +1,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import time
-from fastapi import FastAPI, HTTPException, Request, Depends, Header, WebSocket, WebSocketDisconnect
-from src.video import create_video_writer, decode_frame, generate_frames, write_frame
+from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from .ai_ollama import MODELS, ask_ai_cloud
 from .models.chat import Chat, ChatMessage
 from src.schemas import ChatRequest, UserCreate, UserRead, UserUpdate
@@ -14,7 +13,6 @@ from datetime import datetime, timezone
 import uuid
 from src.users import auth_backend, current_active_user, fastapi_users
 from src.logging_config import logger
-from fastapi.responses import StreamingResponse
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,13 +25,12 @@ app = FastAPI(lifespan=lifespan)
 async def log_requests(request: Request, call_next):
     response = await call_next(request)
 
-    if request.url.path not in {"/video_feed", "/ws/feed"}:
-        logger.info(
-            "%s %s %d",
-            request.method,
-            request.url.path,
-            response.status_code,
-        )
+    logger.info(
+        "%s %s %d",
+        request.method,
+        request.url.path,
+        response.status_code,
+    )
 
     return response
 
@@ -273,49 +270,3 @@ async def send_message(
         "response": ai_response,
         "duration": round(duration, 3),
     }
-
-
-
-
-@app.get("/video_feed")
-async def video_feed():
-    return StreamingResponse(
-        generate_frames(),
-        media_type="multipart/x-mixed-replace; boundary=frame"
-    )
-
-
-@app.websocket("/ws/feed")
-async def receive_stream(
-    websocket: WebSocket,
-    api_key_record: ApiKey = Depends(validate_api_key),
-    session: AsyncSession = Depends(get_async_session),
-):
-    await websocket.accept()
-
-    writer = None
-
-    try:
-        while True:
-            data = await websocket.receive_bytes()
-
-            frame = decode_frame(data)
-            if frame is None:
-                continue
-            
-            name = (
-                f"{api_key_record.user_id}_"
-                f"{datetime.now():%Y%m%d_%H%M%S}.mp4"
-            )
-
-            if writer is None:
-                writer = create_video_writer(name, frame)
-
-            write_frame(writer, frame)
-
-    except WebSocketDisconnect:
-        print("Client disconnected")
-
-    finally:
-        if writer is not None:
-            writer.release()

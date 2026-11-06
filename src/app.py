@@ -10,19 +10,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.ai_ollama import MODELS, ask_ai_cloud
+from src.auth import OIDC_CLIENT_ID, current_active_user
 from src.db import ApiKey, User, create_db_and_tables, get_async_session, hash_secret
-from src.hub.router import router as hub_router
 from src.logging_config import logger
 from src.models.chat import Chat, ChatMessage
-from src.schemas import ChatRequest, UserCreate, UserRead, UserUpdate
-from src.users import auth_backend, current_active_user, fastapi_users
+from src.schemas import ChatRequest
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_db_and_tables()
     yield
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    lifespan=lifespan,
+    # The "Authorize" button on /docs logs in through Authentik with PKCE.
+    swagger_ui_init_oauth={
+        "clientId": OIDC_CLIENT_ID,
+        "usePkceWithAuthorizationCodeGrant": True,
+        "scopes": "openid email profile",
+    },
+)
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -38,13 +45,15 @@ async def log_requests(request: Request, call_next):
     return response
 
 
-# Existing FastAPI-Users Routers
-app.include_router(fastapi_users.get_auth_router(auth_backend), prefix="/auth/jwt", tags=["auth"])
-app.include_router(fastapi_users.get_register_router(UserRead, UserCreate), prefix="/auth", tags=["auth"])
-app.include_router(fastapi_users.get_reset_password_router(), prefix="/auth", tags=["auth"])
-app.include_router(fastapi_users.get_verify_router(UserRead), prefix="/auth", tags=["auth"])
-app.include_router(fastapi_users.get_users_router(UserRead, UserUpdate), prefix="/users", tags=["users"])
-app.include_router(hub_router)
+# Registration, login, password reset and 2FA are handled by Authentik.
+@app.get("/users/me", tags=["users"])
+async def read_me(user: User = Depends(current_active_user)):
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "is_active": user.is_active,
+        "is_verified": user.is_verified,
+    }
 
 
 @app.post("/apikeys/generate", tags=["API Keys"])
@@ -176,9 +185,16 @@ async def get_chats(
         
     return {"chat_list":chats_data}
 
-# GET is the right method for reading a list. POST still works so existing clients keep working.
-@app.api_route("/chat/ai/models", methods=["GET", "POST"], tags=["AI Chat"])
+@app.get("/chat/ai/models", tags=["AI Chat"])
 async def list_models(
+    api_key_record: ApiKey = Depends(validate_api_key),
+):
+    return MODELS
+
+
+# Kept so existing clients that use POST keep working. New code should use GET.
+@app.post("/chat/ai/models", tags=["AI Chat"], deprecated=True)
+async def list_models_post(
     api_key_record: ApiKey = Depends(validate_api_key),
 ):
     return MODELS

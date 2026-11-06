@@ -1,0 +1,80 @@
+# Creates the Authentik applications for face_chat and the sample website.
+# Authentik applies this automatically on start, and again whenever the file changes.
+#
+# To add another website, copy the "sample-site" provider + application entries,
+# change the names, client_id and redirect URL, and give it its own client secret.
+version: 1
+metadata:
+  name: face_chat applications
+entries:
+  # ---------------------------------------------------------------- face_chat API
+  # Public client: the browser (the API's /docs page, or your frontend) logs in with
+  # PKCE and sends the access token to the API. The API only checks tokens.
+  - model: authentik_providers_oauth2.oauth2provider
+    id: face-chat-provider
+    identifiers:
+      name: face-chat
+    attrs:
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: public
+      client_id: face-chat
+      grant_types: [authorization_code, refresh_token]
+      redirect_uris:
+        - matching_mode: strict
+          url: !Format ["%s/docs/oauth2-redirect", !Env [FACE_CHAT_URL, "http://localhost:8000"]]
+        # Add your frontend's callback URL here when you build it, for example:
+        # - matching_mode: strict
+        #   url: https://app.example.uz/auth/callback
+      # Sign tokens with an RSA key, so the API can check them with the public key (JWKS).
+      signing_key: !Find [authentik_crypto.certificatekeypair, [managed, goauthentik.io/crypto/jwt-managed]]
+      sub_mode: hashed_user_id
+      # Put email and name in the tokens too. The API reads them from the access token.
+      include_claims_in_id_token: true
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-offline_access]]
+
+  - model: authentik_core.application
+    identifiers:
+      slug: face-chat
+    attrs:
+      name: face_chat
+      provider: !KeyOf face-chat-provider
+      meta_launch_url: !Format ["%s/docs", !Env [FACE_CHAT_URL, "http://localhost:8000"]]
+
+  # ---------------------------------------------------------------- sample website
+  # Confidential client: the website's server does the login and keeps the secret.
+  - model: authentik_providers_oauth2.oauth2provider
+    id: sample-site-provider
+    identifiers:
+      name: sample-site
+    attrs:
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: confidential
+      client_id: sample-site
+      client_secret: !Env SAMPLE_SITE_CLIENT_SECRET
+      grant_types: [authorization_code, refresh_token]
+      redirect_uris:
+        - matching_mode: strict
+          url: !Format ["%s/auth/callback", !Env [SAMPLE_SITE_URL, "http://localhost:8001"]]
+        - matching_mode: strict
+          url: !Format ["%s/", !Env [SAMPLE_SITE_URL, "http://localhost:8001"]]
+          redirect_uri_type: logout
+      signing_key: !Find [authentik_crypto.certificatekeypair, [managed, goauthentik.io/crypto/jwt-managed]]
+      sub_mode: hashed_user_id
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
+
+  - model: authentik_core.application
+    identifiers:
+      slug: sample-site
+    attrs:
+      name: Sample website
+      provider: !KeyOf sample-site-provider
+      meta_launch_url: !Env [SAMPLE_SITE_URL, "http://localhost:8001"]

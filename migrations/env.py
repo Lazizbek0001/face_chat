@@ -11,7 +11,6 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.db import DATABASE_URL, Base  # noqa: E402
 import src.models.chat  # noqa: E402,F401
-import src.models.hub  # noqa: E402,F401
 
 config = context.config
 # Use the same database as the app (DATABASE_URL in .env), not a value in alembic.ini.
